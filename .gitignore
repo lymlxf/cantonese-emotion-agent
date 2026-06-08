@@ -1,0 +1,9 @@
+node_modules/
+dist/
+uploads/
+*.wav
+*.mp3
+__pycache__/
+.vscode/
+.env
+checkpoints/
