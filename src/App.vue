@@ -43,7 +43,7 @@ import { ref, nextTick } from 'vue'
 import axios from 'axios'
 
 // --- 【1. 请在这里填入你的 API Key】 ---
-const MY_API_KEY = 
+const MY_API_KEY = import.meta.env.VITE_MY_API_KEY
 
 const messages = ref([{ isAi: true, text: '系统已就绪。长按录音，稍后点击“播放原声”可核对录音。' }])
 const isProcessing = ref(false)
@@ -62,27 +62,33 @@ const handlePlayback = (msg) => {
 
   // 2. 如果是播放“用户原声”
   if (!msg.isAi && msg.audioUrl) {
-    // 如果之前已经创建过播放器，先把它关了，防止重叠
-    if (msg.audioInstance) {
-      if (!msg.audioInstance.paused) {
+    if (msg.isPlaying) {
+      if (msg.audioInstance) {
         msg.audioInstance.pause();
-        msg.isPlaying = false;
-        return;
+        msg.audioInstance.currentTime = 0;
       }
-      msg.audioInstance.currentTime = 0; // 从头播放
-      msg.audioInstance.play();
-      msg.isPlaying = true;
-    } else {
+      msg.isPlaying = false;
+      return;
+    }
+
+    if (!msg.audioInstance) {
       // 第一次点击，创建播放器
       const audio = new Audio(msg.audioUrl);
       msg.audioInstance = audio;
       audio.onended = () => { msg.isPlaying = false };
-      audio.play();
-      msg.isPlaying = true;
     }
+
+    msg.audioInstance.currentTime = 0; // 从头播放
+    msg.audioInstance.play();
+    msg.isPlaying = true;
   } 
   // 3. 如果是播放“AI 回复”
   else if (msg.isAi) {
+    if (msg.isPlaying) {
+      msg.isPlaying = false;
+      return;
+    }
+
     // 逻辑：因为第一步已经 cancel 了，所以这里直接重新开始念
     const utterance = new SpeechSynthesisUtterance(msg.text);
     utterance.lang = 'zh-HK';

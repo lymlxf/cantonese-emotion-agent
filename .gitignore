@@ -6,4 +6,6 @@ uploads/
 __pycache__/
 .vscode/
 .env
+.env.local
+.env.*.local
 checkpoints/
