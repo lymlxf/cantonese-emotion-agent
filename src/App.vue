@@ -43,7 +43,7 @@ import { ref, nextTick } from 'vue'
 import axios from 'axios'
 
 // --- 【1. 请在这里填入你的 API Key】 ---
-const MY_API_KEY = 
+const MY_API_KEY = ''
 
 const messages = ref([{ isAi: true, text: '系统已就绪。长按录音，稍后点击“播放原声”可核对录音。' }])
 const isProcessing = ref(false)
