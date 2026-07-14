@@ -468,6 +468,28 @@
     font-size: 0.95rem;
   }
 
+  #cser-project-page .cser-media-figure {
+    margin: 28px 0 0;
+  }
+
+  #cser-project-page .cser-media-figure img {
+    display: block;
+    width: 100%;
+    height: auto;
+    border: 1px solid rgba(219, 234, 254, 0.95);
+    border-radius: 20px;
+    background: var(--cser-card);
+    box-shadow: var(--cser-shadow-soft);
+  }
+
+  #cser-project-page .cser-media-figure figcaption {
+    margin-top: 10px;
+    color: var(--cser-ink-muted);
+    font-size: 0.9rem;
+    line-height: 1.5;
+    text-align: center;
+  }
+
   #cser-project-page .cser-emotions {
     display: grid;
     grid-template-columns: repeat(8, minmax(0, 1fr));
