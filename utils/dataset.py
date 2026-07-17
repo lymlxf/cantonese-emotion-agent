@@ -85,8 +85,8 @@ class CantoneseSERDataset(Dataset):
             dict with keys:
                 - 'audio': Tensor (n_mels, time_steps)
                 - 'audio_length': int
-                - 'text': Tensor (1, 200) - sentence embedding
-                - 'text_length': int (always 1)
+            - 'text': Tensor — shape (seq_len, 200) float32 for Word2Vec or (seq_len,) int64 for CantoBERT
+            - 'text_length': int
                 - 'label': Tensor (1,)
         """
         row = self.df.iloc[idx]
@@ -98,9 +98,9 @@ class CantoneseSERDataset(Dataset):
         # Process text
         text = row['text']
         text_embeddings, text_length = self.text_preprocessor(text)
-        
-        # Convert to tensors
-        text_tensor = torch.tensor(text_embeddings, dtype=torch.float32)
+
+        # Convert to tensor — preserve native dtype (float32 for Word2Vec, int64 for CantoBERT)
+        text_tensor = torch.from_numpy(text_embeddings)
         
         # Map label
         label_str = row['label']

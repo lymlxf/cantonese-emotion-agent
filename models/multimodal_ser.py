@@ -8,12 +8,14 @@ if __name__ == "__main__" and __package__ is None:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from models.audio_encoder import AudioEncoder
     from models.text_encoder import TextEncoder
+    from models.cantobert_encoder import CantoBertEncoder
     from models.cross_modal_attention import CrossModalAttentionModule
     from models.statistics_pooling import StatisticsPooling
     from models.classifier import EmotionClassifier
 else:
     from .audio_encoder import AudioEncoder
     from .text_encoder import TextEncoder
+    from .cantobert_encoder import CantoBertEncoder
     from .cross_modal_attention import CrossModalAttentionModule
     from .statistics_pooling import StatisticsPooling
     from .classifier import EmotionClassifier
@@ -45,7 +47,8 @@ class MultimodalSER(nn.Module):
         num_classes: int = 8,
         dropout: float = 0.2,
         freeze_embeddings: bool = True,
-        modality: str = "both"
+        modality: str = "both",
+        text_encoder_type: str = "word2vec",
     ):
         """
         Args:
@@ -53,6 +56,9 @@ class MultimodalSER(nn.Module):
                 - "both": Full multimodal model
                 - "audio": Audio-only model (smaller, faster inference)
                 - "text": Text-only model (no audio processing needed)
+            text_encoder_type: "word2vec" (default) | "cantobert"
+                - "word2vec": Static Word2Vec + Conv1d + BiLSTM (existing)
+                - "cantobert": Frozen BART-base-cantonese + Linear projection
         """
         super(MultimodalSER, self).__init__()
         
@@ -62,6 +68,7 @@ class MultimodalSER(nn.Module):
         self.modality = modality
         self.d_model = d_model
         self.num_classes = num_classes
+        self.text_encoder_type = text_encoder_type
         
         # Create encoders based on modality
         if modality in ["both", "audio"]:
@@ -75,14 +82,20 @@ class MultimodalSER(nn.Module):
             )
         
         if modality in ["both", "text"]:
-            self.text_encoder = TextEncoder(
-                embedding_model_name="w2v-light-tencent-chinese",
-                hidden_dim=text_hidden_dim,
-                conv_channels=256,
-                kernel_size=3,
-                dropout=dropout,
-                freeze_embeddings=freeze_embeddings
-            )
+            if text_encoder_type == "cantobert":
+                self.text_encoder = CantoBertEncoder(
+                    d_model=d_model,
+                    freeze_backbone=True,
+                )
+            else:
+                self.text_encoder = TextEncoder(
+                    embedding_model_name="w2v-light-tencent-chinese",
+                    hidden_dim=text_hidden_dim,
+                    conv_channels=256,
+                    kernel_size=3,
+                    dropout=dropout,
+                    freeze_embeddings=freeze_embeddings
+                )
         
         # Cross-modal attention only for multimodal
         if modality == "both":
@@ -120,6 +133,13 @@ class MultimodalSER(nn.Module):
             num_classes=num_classes,
             dropout=dropout
         )
+
+        # Audio-only classification head for auxiliary loss / stage-1 distillation.
+        self.audio_head = nn.Linear(d_model * 2, num_classes)
+
+        # Feature distillation projection: maps audio pooled features (d_model*2)
+        # to text CLS token dimension (d_model). Used only in stage 1.
+        self.distill_proj = nn.Linear(d_model * 2, d_model)
         
     def forward(
         self,
@@ -141,7 +161,18 @@ class MultimodalSER(nn.Module):
         
         if self.modality in ["both", "text"]:
             assert text_input is not None, "text_input is required for modality='{}'".format(self.modality)
-            text_features = self.text_encoder(text_input, text_lengths)
+            if self.text_encoder_type == "cantobert":
+                # text_input: (batch, seq_len) long — token IDs
+                # Build attention mask from text_lengths (non-padded positions)
+                if text_lengths is not None:
+                    max_text_len = text_input.size(1)
+                    attention_mask = torch.arange(max_text_len, device=text_input.device).unsqueeze(0) < text_lengths.unsqueeze(1)
+                    attention_mask = attention_mask.long()
+                else:
+                    attention_mask = None
+                text_features = self.text_encoder(text_input, attention_mask)
+            else:
+                text_features = self.text_encoder(text_input, text_lengths)
         
         if self.modality == "both":
             # Full multimodal path with cross-modal attention

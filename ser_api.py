@@ -17,7 +17,8 @@ import argparse
 import logging
 import os
 import sys
-
+import os
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 import torch
 from flask import Flask, jsonify, request
 
@@ -28,7 +29,7 @@ if PROJECT_ROOT not in sys.path:
 
 from models import MultimodalSER
 from utils.audio_utils import AudioPreprocessor
-from utils.text_utils import TextPreprocessor
+from utils.text_utils import TextPreprocessor, CantoBertTextPreprocessor
 
 # == Logging ===================================================================
 logging.basicConfig(
@@ -53,7 +54,8 @@ LABEL_NAMES = {
 _model: MultimodalSER = None
 _device: torch.device = None
 _audio_preprocessor: AudioPreprocessor = None
-_text_preprocessor: TextPreprocessor = None
+_text_preprocessor = None  # TextPreprocessor or CantoBertTextPreprocessor
+_text_encoder_type: str = "word2vec"
 
 
 # =============================================================================
@@ -88,9 +90,12 @@ def load_model(checkpoint_path: str, device: torch.device):
         num_classes=config.get("num_classes", 8),
         dropout=config.get("dropout", 0.2),
         modality=modality,
+        text_encoder_type=config.get("text_encoder_type", _text_encoder_type),
     ).to(device)
 
-    model.load_state_dict(ckpt["model_state_dict"])
+    # Load with strict=False: frozen BART weights are loaded from HuggingFace,
+    # not stored in checkpoint (they never change during training).
+    model.load_state_dict(ckpt["model_state_dict"], strict=False)
     model.eval()
 
     logger.info("  Modality: %s", modality)
@@ -139,31 +144,39 @@ def preprocess_audio(audio_path: str):
 # =============================================================================
 
 def preprocess_text(text: str):
-    """Convert raw Chinese/Cantonese text to Word2Vec embedding tensor.
+    """Convert raw Chinese/Cantonese text to model-ready tensor.
 
-    Returns (embeddings, length_tensor):
-        embeddings:  Tensor of shape (1, seq_len, 200)
-        length_tensor:  Tensor of shape (1,) containing the number of words
+    Word2Vec mode: returns (embeddings, length_tensor) where embeddings is (1, seq_len, 200) float.
+    CantoBERT mode: returns (token_ids, length_tensor) where token_ids is (1, seq_len) long.
     """
     global _text_preprocessor
 
     if _text_preprocessor is None:
-        logger.info("Loading TextPreprocessor (Word2Vec model)...")
-        _text_preprocessor = TextPreprocessor()
+        if _text_encoder_type == "cantobert":
+            logger.info("Loading CantoBERT TextPreprocessor...")
+            _text_preprocessor = CantoBertTextPreprocessor()
+        else:
+            logger.info("Loading TextPreprocessor (Word2Vec model)...")
+            _text_preprocessor = TextPreprocessor()
 
     if not text or not text.strip():
         raise ValueError("Text input is empty")
 
-    embeddings, length = _text_preprocessor(text)
+    data, length = _text_preprocessor(text)
 
-    if length == 0 or embeddings.shape[0] == 0:
+    if length == 0 or data.shape[0] == 0:
         raise ValueError(f"Text preprocessing produced empty output for: {text!r}")
 
-    # Add batch dimension: (seq_len, 200) → (1, seq_len, 200)
-    embeddings = torch.from_numpy(embeddings).float().unsqueeze(0)
-    length_tensor = torch.tensor([length]).clamp(min=1)
-
-    return embeddings, length_tensor
+    if _text_encoder_type == "cantobert":
+        # Token IDs: (seq_len,) int64 → (1, seq_len) long
+        token_ids = torch.from_numpy(data).long().unsqueeze(0)
+        length_tensor = torch.tensor([length]).clamp(min=1)
+        return token_ids, length_tensor
+    else:
+        # Word2Vec embeddings: (seq_len, 200) float → (1, seq_len, 200) float
+        embeddings = torch.from_numpy(data).float().unsqueeze(0)
+        length_tensor = torch.tensor([length]).clamp(min=1)
+        return embeddings, length_tensor
 
 
 # =============================================================================
@@ -306,6 +319,12 @@ def parse_args():
         help="Host to bind (default: 0.0.0.0)",
     )
     parser.add_argument(
+        "--text_encoder",
+        default="word2vec",
+        choices=["word2vec", "cantobert"],
+        help="Text encoder backend (default: word2vec)",
+    )
+    parser.add_argument(
         "--port", type=int, default=5000,
         help="Port to bind (default: 5000)",
     )
@@ -323,6 +342,7 @@ def parse_args():
 def main():
     global _model, _device, _audio_preprocessor
     global _allowed_dir, _max_file_size_mb, _max_audio_sec
+    global _text_encoder_type
 
     args = parse_args()
 
@@ -330,6 +350,7 @@ def main():
     _allowed_dir = args.allowed_dir
     _max_file_size_mb = args.max_file_size_mb
     _max_audio_sec = args.max_audio_sec
+    _text_encoder_type = args.text_encoder
 
     # Ensure allowed directory exists
     os.makedirs(_allowed_dir, exist_ok=True)
